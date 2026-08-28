@@ -1,0 +1,71 @@
+---
+title: "2022 Florida Gubernatorial Election"
+author: "Student"
+format: html
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+```{r}
+#| label: setup
+library(tidyverse)
+library(scales)
+
+# Load county-level election results
+county_data <- read_csv("data/20221108__fl__general__county.csv")
+
+# Filter for the Governor race and find the winning candidate per county
+gov_winners <- county_data |>
+  filter(
+    office == "Governor",
+    !candidate %in% c("OverVotes", "UnderVotes", "WriteinVotes")
+  ) |>
+  group_by(county) |>
+  mutate(
+    total_votes = sum(votes),
+    pct = votes / total_votes
+  ) |>
+  slice_max(votes, n = 1) |>
+  ungroup() |>
+  # Standardize county names to match ggplot2 map data
+  mutate(
+    subregion = tolower(county),
+    subregion = recode(
+      subregion,
+      "desoto" = "de soto",
+      "st. johns" = "st johns",
+      "st. lucie" = "st lucie"
+    )
+  )
+
+# Get Florida county map boundary polygons
+fl_map <- map_data("county") |>
+  filter(region == "florida") |>
+  left_join(gov_winners, by = "subregion")
+
+# Plot NPR-style choropleth map of the election winners
+ggplot(fl_map, aes(x = long, y = lat, group = group, fill = candidate)) +
+  geom_polygon(color = "white", linewidth = 0.3) +
+  coord_quickmap() +
+  scale_fill_manual(
+    name = "Winner",
+    values = c(
+      "Crist / Hernandez" = "#377eb8",
+      "DeSantis / Nuñez" = "#e41a1c"
+    )
+  ) +
+  labs(
+    title = "2022 Florida Gubernatorial Election Results by County",
+    subtitle = "Ron DeSantis (R) defeated Charlie Crist (D)",
+    caption = "Source: Florida Department of State"
+  ) +
+  theme_void() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray30"),
+    plot.caption = element_text(size = 8, color = "gray50", hjust = 0.95),
+    legend.position = "bottom"
+  )
+```
