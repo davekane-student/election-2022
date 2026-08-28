@@ -11,44 +11,43 @@ execute:
 ```{r}
 #| label: setup
 library(tidyverse)
+library(sf)
+library(tigris)
+options(tigris_use_cache = TRUE)
+library(cartogram)
 library(scales)
 
 # Load county-level election results
 county_data <- read_csv("data/20221108__fl__general__county.csv")
 
-# Filter for the Governor race and find the winning candidate per county
-gov_winners <- county_data |>
+# Filter for Governor race, calculate vote margins and winner per county
+gov_stats <- county_data |>
   filter(
     office == "Governor",
     !candidate %in% c("OverVotes", "UnderVotes", "WriteinVotes")
   ) |>
+  mutate(county = recode(county, "Desoto" = "DeSoto")) |>
   group_by(county) |>
-  mutate(
+  summarize(
     total_votes = sum(votes),
-    pct = votes / total_votes
-  ) |>
-  slice_max(votes, n = 1) |>
-  ungroup() |>
-  # Standardize county names to match ggplot2 map data
-  mutate(
-    subregion = tolower(county),
-    subregion = recode(
-      subregion,
-      "desoto" = "de soto",
-      "st. johns" = "st johns",
-      "st. lucie" = "st lucie"
-    )
+    desantis_votes = sum(votes[grepl("DeSantis", candidate)]),
+    crist_votes = sum(votes[grepl("Crist", candidate)]),
+    margin = (desantis_votes - crist_votes) / total_votes,
+    winner = if_else(margin > 0, "DeSantis / Nuñez", "Crist / Hernandez")
   )
 
-# Get Florida county map boundary polygons
-fl_map <- map_data("county") |>
-  filter(region == "florida") |>
-  left_join(gov_winners, by = "subregion")
+# Download Florida county boundaries as an sf object
+fl_counties <- counties(state = "FL", cb = TRUE, progress_bar = FALSE) |>
+  st_transform(3086) |>
+  left_join(gov_stats, by = c("NAME" = "county"))
+```
 
-# Plot NPR-style choropleth map of the election winners
-ggplot(fl_map, aes(x = long, y = lat, group = group, fill = candidate)) +
-  geom_polygon(color = "white", linewidth = 0.3) +
-  coord_quickmap() +
+## Geographic Map
+
+```{r}
+#| label: geographic-map
+ggplot(fl_counties) +
+  geom_sf(aes(fill = winner), color = "white", linewidth = 0.3) +
   scale_fill_manual(
     name = "Winner",
     values = c(
@@ -57,8 +56,8 @@ ggplot(fl_map, aes(x = long, y = lat, group = group, fill = candidate)) +
     )
   ) +
   labs(
-    title = "2022 Florida Gubernatorial Election Results by County",
-    subtitle = "Ron DeSantis (R) defeated Charlie Crist (D)",
+    title = "2022 Florida Governor Race (Geographic Area)",
+    subtitle = "Standard county boundaries colored by winning candidate",
     caption = "Source: Florida Department of State"
   ) +
   theme_void() +
@@ -67,5 +66,82 @@ ggplot(fl_map, aes(x = long, y = lat, group = group, fill = candidate)) +
     plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray30"),
     plot.caption = element_text(size = 8, color = "gray50", hjust = 0.95),
     legend.position = "bottom"
+  )
+```
+
+## Vote-Weighted Cartogram
+
+```{r}
+#| label: cartogram-map
+# Reshape county boundaries proportional to total votes cast
+fl_carto <- cartogram_cont(fl_counties, "total_votes", itermax = 5)
+
+ggplot(fl_carto) +
+  geom_sf(aes(fill = winner), color = "white", linewidth = 0.3) +
+  scale_fill_manual(
+    name = "Winner",
+    values = c(
+      "Crist / Hernandez" = "#377eb8",
+      "DeSantis / Nuñez" = "#e41a1c"
+    )
+  ) +
+  labs(
+    title = "2022 Florida Governor Race (Vote-Weighted Cartogram)",
+    subtitle = "Counties sized in proportion to total votes cast",
+    caption = "Source: Florida Department of State"
+  ) +
+  theme_void() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray30"),
+    plot.caption = element_text(size = 8, color = "gray50", hjust = 0.95),
+    legend.position = "bottom"
+  )
+```
+
+## Proportional Bubble Map
+
+```{r}
+#| label: bubble-map
+# Compute county center coordinates (centroids)
+fl_centroids <- st_centroid(fl_counties)
+
+ggplot() +
+  # Draw county boundary outlines
+  geom_sf(data = fl_counties, fill = "#f5f5f5", color = "#d0d0d0", linewidth = 0.3) +
+  # Add dots sized by total votes and colored by margin of victory
+  geom_sf(
+    data = fl_centroids,
+    aes(size = total_votes, fill = margin),
+    shape = 21,
+    color = "white",
+    stroke = 0.4,
+    alpha = 0.85
+  ) +
+  scale_size_area(
+    name = "Total Votes",
+    max_size = 13,
+    labels = label_comma()
+  ) +
+  scale_fill_gradient2(
+    name = "Margin",
+    low = "#2166ac",
+    mid = "#f7f7f7",
+    high = "#b2182b",
+    midpoint = 0,
+    labels = label_percent()
+  ) +
+  labs(
+    title = "2022 Florida Governor Race (Proportional Bubble Map)",
+    subtitle = "Dot size reflects total votes; color gradient indicates margin of victory",
+    caption = "Source: Florida Department of State"
+  ) +
+  theme_void() +
+  theme(
+    plot.title = element_text(face = "bold", size = 14, hjust = 0.5),
+    plot.subtitle = element_text(size = 11, hjust = 0.5, color = "gray30"),
+    plot.caption = element_text(size = 8, color = "gray50", hjust = 0.95),
+    legend.position = "bottom",
+    legend.box = "horizontal"
   )
 ```
